@@ -1,0 +1,1 @@
+{"version":1,"call_otm_multiplier":1.12,"put_otm_multiplier":1.18,"call_buffer_pts":15,"put_buffer_pts":50,"markov_weight":0.60,"intraday_weight":0.40,"vix_assumed":19.5,"last_updated":null,"call_survival_rate_10d":null,"put_survival_rate_10d":null,"strangle_win_rate_10d":null,"regime_accuracy_10d":null,"notes":"Initial defaults"}

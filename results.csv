@@ -1,0 +1,1 @@
+date,regime,actual_next_regime,regime_persisted,prev_close,open,high,low,close,gap_pct,open_vs_cpr,cpr_lower,cpr_upper,pivot,r1,r2,s1,s2,call_strike,put_strike,call_survived,put_survived,strangle_profitable,call_margin,put_margin,predicted_direction,actual_direction,direction_correct,expected_drift_pts,actual_drift_pts,call_otm_mult_used,put_otm_mult_used,markov_weight_used

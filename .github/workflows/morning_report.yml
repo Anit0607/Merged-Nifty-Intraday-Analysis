@@ -1,4 +1,4 @@
-﻿name: Morning Report
+name: Morning Report
 
 on:
   schedule:
@@ -9,7 +9,7 @@ on:
 jobs:
   run-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repo
@@ -21,7 +21,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfinance numpy pandas requests pytz
+        run: pip install yfinance numpy pandas requests pytz nltk feedparser
 
       - name: Run morning report
         run: python morning_report.py

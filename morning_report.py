@@ -142,10 +142,13 @@ def main():
     today_str = today.strftime("%d %b %Y")
 
     # 1. Nifty OHLC
-    df = yf.Ticker("^NSEI").history(period="10y")[["Open","High","Low","Close"]].dropna()
+    df_long  = yf.Ticker("^NSEI").history(period="10y")[["Open","High","Low","Close"]].dropna()
+    df_fresh = yf.Ticker("^NSEI").history(period="1d")[["Open","High","Low","Close"]].dropna()
+    df = pd.concat([df_long, df_fresh])
+    df = df[~df.index.duplicated(keep="last")].sort_index()
     last_date = df.index[-1].date()
-    bdays     = np.busday_count(last_date, today.date())
-    if bdays > 1:
+    bdays     = int(np.busday_count(last_date, today.date()))
+    if bdays > 3:
         tele(f"NSE closed today ({today_str}) — no analysis")
         return
 

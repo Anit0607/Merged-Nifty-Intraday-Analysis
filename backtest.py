@@ -91,7 +91,10 @@ def main():
     today_disp = today.strftime("%d %b %Y")
 
     # 1. Fetch Nifty data
-    df = yf.Ticker("^NSEI").history(period="10y")[["Open","High","Low","Close"]].dropna()
+    df_long  = yf.Ticker("^NSEI").history(period="10y")[["Open","High","Low","Close"]].dropna()
+    df_fresh = yf.Ticker("^NSEI").history(period="1d")[["Open","High","Low","Close"]].dropna()
+    df = pd.concat([df_long, df_fresh])
+    df = df[~df.index.duplicated(keep="last")].sort_index()
     last_date = df.index[-1].date()
 
     if last_date != today_date:

@@ -322,6 +322,25 @@ def main():
         f"Markov+CPR+VIX+News+FII | {today_disp} | GitHub Actions"
     )
 
+
+    # Save session state so backtest.py uses exact same reference data
+    session = {
+        "date": today_disp,
+        "date_iso": today.strftime("%Y-%m-%d"),
+        "prev_high": pH, "prev_low": pL, "prev_close": pC,
+        "cpr_upper": round(cpu,1), "cpr_lower": round(cpl,1), "cpw": round(cpw,1),
+        "pivot": round(pivot,1),
+        "r1": round(R1,1), "r2": round(R2,1),
+        "s1": round(S1,1), "s2": round(S2,1),
+        "call_strike": cs, "put_strike": ps,
+        "regime": cr, "persistence": round(pers,4), "escape": round(esc,4),
+        "prob_up": prob_up, "prob_side": prob_side, "prob_down": prob_down,
+        "vix": vix, "exp_high": exp_high, "exp_low": exp_low,
+        "conf_overall": conf_overall
+    }
+    with open("session_state.json","w") as f:
+        json.dump(session, f, indent=2)
+    print("session_state.json saved")
     tele(msg1); tele(msg2)
     print(f"Sent | {cr} | Up:{prob_up}% Side:{prob_side}% Down:{prob_down}% | Overall:{conf_overall}%")
 

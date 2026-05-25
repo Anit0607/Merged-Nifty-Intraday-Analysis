@@ -1,12 +1,8 @@
-import yfinance as yf
+﻿import yfinance as yf
 import numpy as np
 import pandas as pd
-import requests
-import math
-import json
-import re
-import feedparser
-import nltk
+import requests, math, json, re
+import feedparser, nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from datetime import datetime
 import pytz
@@ -16,344 +12,318 @@ nltk.download("vader_lexicon", quiet=True)
 TELE_TOKEN = "8623520423:AAH4mSilxgtMHXXyRwlwlFfB-FjB42sDrwQ"
 TELE_CHAT  = 1083142887
 
-HIGH_IMPACT = [
-    "rbi", "repo rate", "rate decision", "rate cut", "rate hike",
-    "federal reserve", "fed meeting", "fomc",
-    "election result", "budget", "ceasefire", "war declaration",
-    "default", "sovereign", "emergency", "circuit breaker"
-]
-MEDIUM_IMPACT = [
-    "gdp", "inflation", "cpi", "wpi", "iip", "pmi",
-    "quarterly result", "earnings", "crude shock", "oil price",
-    "ipo listing", "fii selling", "fii buying", "npa", "credit policy"
-]
-
+HIGH_KW   = ["rbi","repo rate","rate decision","rate cut","rate hike",
+             "federal reserve","fed meeting","fomc","election result",
+             "budget","ceasefire","war","default","emergency","circuit breaker"]
+MEDIUM_KW = ["gdp","inflation","cpi","wpi","pmi","quarterly result",
+             "earnings","crude","oil price","fii selling","fii buying","npa"]
 
 def tele(text):
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage",
-            json={"chat_id": TELE_CHAT, "text": text, "parse_mode": "HTML"},
-            timeout=10
-        )
+        requests.post(f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage",
+                      json={"chat_id":TELE_CHAT,"text":text,"parse_mode":"HTML"},
+                      timeout=15)
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print(f"Telegram err: {e}")
 
+def load_params():
+    try:
+        with open("params.json") as f: return json.load(f)
+    except:
+        return {"call_buffer_pts":15,"put_buffer_pts":50,"vix_range_mult":1.5,
+                "markov_weight":0.60,"intraday_weight":0.40}
 
-def fetch_news_sentiment():
-    """Fetch India market headlines from Google News RSS and score with VADER."""
-    queries = [
-        "nifty+50+india+stock+market+today",
-        "india+NSE+BSE+market+outlook",
-        "RBI+Fed+FII+india+economy"
-    ]
-    headlines = []
+def fetch_news():
     sia = SentimentIntensityAnalyzer()
-
+    queries = ["Nifty 50 stock market India today",
+               "Indian stock market NSE outlook",
+               "Sensex Nifty prediction"]
+    headlines, scores, impact = [], [], "Low"
     for q in queries:
         try:
-            url  = f"https://news.google.com/rss/search?q={q}&hl=en-IN&gl=IN&ceid=IN:en"
+            url = f"https://news.google.com/rss/search?q={q.replace(' ','+')}&hl=en-IN&gl=IN&ceid=IN:en"
             feed = feedparser.parse(url)
-            for entry in feed.entries[:6]:
-                title = re.sub(r"\s*-\s*[^-]+$", "", entry.title).strip()
-                headlines.append(title)
-        except Exception:
-            pass
+            for e in feed.entries[:3]:
+                t = re.sub(r"<[^>]+>","",e.get("title",""))
+                headlines.append(t)
+                sc = sia.polarity_scores(t)["compound"]
+                scores.append(sc)
+                tl = t.lower()
+                if any(k in tl for k in HIGH_KW):   impact = "High"
+                if any(k in tl for k in MEDIUM_KW) and impact!="High": impact = "Medium"
+        except: pass
+    avg = sum(scores)/len(scores) if scores else 0.0
+    sent = "Bullish" if avg>0.05 else ("Bearish" if avg<-0.05 else "Neutral")
+    return avg, sent, impact, headlines[:6]
 
-    if not headlines:
-        return 0.0, [], "Neutral", "Low", 0.0
-
-    # Deduplicate
-    seen, unique = set(), []
-    for h in headlines:
-        key = h[:50].lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(h)
-    headlines = unique[:12]
-
-    scores    = [sia.polarity_scores(h)["compound"] for h in headlines]
-    avg_score = sum(scores) / len(scores)
-
-    if   avg_score >  0.15: bias = "Bullish"
-    elif avg_score < -0.15: bias = "Bearish"
-    else:                   bias = "Neutral"
-
-    all_text = " ".join(headlines).lower()
-    if any(kw in all_text for kw in HIGH_IMPACT):
-        impact_level, impact_adj = "High",   0.10
-    elif any(kw in all_text for kw in MEDIUM_IMPACT):
-        impact_level, impact_adj = "Medium", 0.05
-    else:
-        impact_level, impact_adj = "Low",    0.0
-
-    return avg_score, headlines, bias, impact_level, impact_adj
-
-
-def fetch_fii_dii():
-    """Try NSE API for FII/DII flows. Returns (fii_net_cr, dii_net_cr) or (None, None)."""
+def fetch_fii():
     try:
-        session = requests.Session()
-        bhdrs = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.nseindia.com/market-data/fii-dii-activity",
-        }
-        session.get("https://www.nseindia.com", headers=bhdrs, timeout=8)
-        resp = session.get(
-            "https://www.nseindia.com/api/fiidiiTradeReact",
-            headers=bhdrs, timeout=8
-        )
-        data    = resp.json()
-        fii_net = dii_net = None
-        for item in data:
-            cat = str(item.get("category", "")).upper()
-            val = str(item.get("netVal", "0")).replace(",", "")
-            try:
-                net = float(val)
-            except ValueError:
-                continue
-            if "FII" in cat or "FPI" in cat:
-                fii_net = net
-            elif "DII" in cat:
-                dii_net = net
-        return fii_net, dii_net
-    except Exception:
-        return None, None
+        h = {"User-Agent":"Mozilla/5.0","Accept":"application/json",
+             "Referer":"https://www.nseindia.com/"}
+        r = requests.get("https://www.nseindia.com/api/fiidiiTradeReact",
+                         headers=h, timeout=10)
+        d = r.json()
+        fii = float(d[0].get("netVal",0)) if d else 0.0
+        dii = float(d[1].get("netVal",0)) if len(d)>1 else 0.0
+        return fii, dii
+    except: return 0.0, 0.0
 
-
-def fii_label(val):
-    if val is None: return "Unavailable"
-    if   val >  2000: return f"Strong Buying (+{val:,.0f} Cr)"
-    elif val >   500: return f"Buying (+{val:,.0f} Cr)"
-    elif val <  -2000: return f"Strong Selling ({val:,.0f} Cr)"
-    elif val <  -500: return f"Selling ({val:,.0f} Cr)"
-    else:              return f"Neutral ({val:+,.0f} Cr)"
-
+def pct_chg(t):
+    try:
+        d = yf.Ticker(t).history(period="5d")["Close"].dropna()
+        return float((d.iloc[-1]-d.iloc[-2])/d.iloc[-2]*100)
+    except: return 0.0
 
 def main():
     ist       = pytz.timezone("Asia/Calcutta")
     today     = datetime.now(ist)
-    today_str = today.strftime("%d %b %Y")
+    today_disp= today.strftime("%d %b %Y")
 
-    # 1. Nifty OHLC
+    # ── 1. NIFTY DATA (dual-fetch to bypass yfinance staleness) ───────────
     df_long  = yf.Ticker("^NSEI").history(period="10y")[["Open","High","Low","Close"]].dropna()
     df_fresh = yf.Ticker("^NSEI").history(period="1d")[["Open","High","Low","Close"]].dropna()
     df = pd.concat([df_long, df_fresh])
     df = df[~df.index.duplicated(keep="last")].sort_index()
+
     last_date = df.index[-1].date()
-    bdays     = int(np.busday_count(last_date, today.date()))
+    bdays = int(np.busday_count(last_date, today.date()))
     if bdays > 3:
-        tele(f"NSE closed today ({today_str}) — no analysis")
-        return
+        tele(f"NSE closed today ({today_disp}) — no analysis"); return
 
-    prev      = df.iloc[-1]
+    prev = df.iloc[-1]
     pH, pL, pC = float(prev.High), float(prev.Low), float(prev.Close)
-    prev2_close = float(df.iloc[-2].Close)
 
-    # 2. VIX
-    try:    vix = float(yf.Ticker("^INDIAVIX").history(period="5d")["Close"].iloc[-1])
+    # ── 2. VIX ─────────────────────────────────────────────────────────────
+    try:
+        vix = float(yf.Ticker("^INDIAVIX").history(period="5d")["Close"].dropna().iloc[-1])
     except: vix = 19.5
 
-    # 3. Global markets
-    def chg(t):
-        try:
-            d = yf.Ticker(t).history(period="5d")["Close"]
-            return (d.iloc[-1] - d.iloc[-2]) / d.iloc[-2] * 100
-        except: return 0.0
+    if   vix < 12: vix_lbl = "Very Low"
+    elif vix < 16: vix_lbl = "Normal"
+    elif vix < 20: vix_lbl = "Elevated"
+    elif vix < 25: vix_lbl = "High"
+    else:          vix_lbl = "Extreme"
 
-    sp = chg("^GSPC"); nq = chg("^IXIC")
-    nk = chg("^N225"); hs = chg("^HSI")
-    try:    brent  = float(yf.Ticker("BZ=F").history(period="2d")["Close"].iloc[-1])
-    except: brent  = 0.0
-    try:    usdinr = float(yf.Ticker("USDINR=X").history(period="2d")["Close"].iloc[-1])
+    # ── 3. GLOBAL CUES ──────────────────────────────────────────────────────
+    sp=pct_chg("^GSPC"); nq=pct_chg("^IXIC")
+    nk=pct_chg("^N225"); hs=pct_chg("^HSI")
+    try: brent  = float(yf.Ticker("BZ=F").history(period="2d")["Close"].iloc[-1])
+    except: brent = 0.0
+    try: usdinr = float(yf.Ticker("USDINR=X").history(period="2d")["Close"].iloc[-1])
     except: usdinr = 0.0
 
-    # 4. News & Sentiment
+    # ── 4. NEWS & FII ───────────────────────────────────────────────────────
     print("Fetching news...")
-    news_score, headlines, news_bias, impact_level, impact_adj = fetch_news_sentiment()
-
-    # 5. FII / DII
+    n_score, n_sent, n_impact, headlines = fetch_news()
     print("Fetching FII/DII...")
-    fii_net, dii_net = fetch_fii_dii()
+    fii_net, dii_net = fetch_fii()
 
-    # 6. Markov
+    # ── 5. MARKOV ───────────────────────────────────────────────────────────
     ret  = df["Close"].pct_change().dropna()
     rm   = ret.rolling(20).mean().dropna()
-    p33, p67 = float(np.percentile(rm, 33)), float(np.percentile(rm, 67))
-    lbl  = rm.apply(lambda x: "Bear" if x <= p33 else ("Bull" if x >= p67 else "Sideways"))
-    states = ["Bear", "Sideways", "Bull"]
-    T      = pd.DataFrame(0, index=states, columns=states)
-    for i in range(len(lbl) - 1):
-        T.loc[lbl.iloc[i], lbl.iloc[i+1]] += 1
-    Tp        = T.div(T.sum(axis=1), axis=0)
-    cr        = lbl.iloc[-1]
-    pers      = float(Tp.loc[cr, cr])
-    esc       = 1.0 - pers
-    days_left = round(1 / (1 - pers), 1) if pers < 1 else 999
-    drift     = float(ret.reindex(lbl.index)[lbl == cr].mean() * pC)
+    p33, p67 = float(np.percentile(rm,33)), float(np.percentile(rm,67))
+    lbl  = rm.apply(lambda x:"Bear" if x<=p33 else("Bull" if x>=p67 else "Sideways"))
 
-    # 7. Params
-    try:
-        resp_p = requests.get(
-            "https://raw.githubusercontent.com/Anit0607/Merged-Nifty-Intraday-Analysis/main/params.json",
-            timeout=6
-        )
-        p = resp_p.json()
-    except Exception:
-        p = {"call_buffer_pts": 15, "put_buffer_pts": 50,
-             "markov_weight": 0.60, "intraday_weight": 0.40,
-             "vix_range_mult": 1.5, "vix_assumed": 19.5}
+    states = ["Bear","Sideways","Bull"]
+    T = pd.DataFrame(0,index=states,columns=states)
+    for i in range(len(lbl)-1): T.loc[lbl.iloc[i],lbl.iloc[i+1]] += 1
+    Tp = T.div(T.sum(axis=1),axis=0)
 
-    vix_mult = float(p.get("vix_range_mult", 1.5))
-    mw       = float(p.get("markov_weight",   0.60))
-    iw       = float(p.get("intraday_weight", 0.40))
+    cr    = lbl.iloc[-1]
+    pers  = float(Tp.loc[cr,cr])
+    esc   = 1.0 - pers
+    drift = float(ret.reindex(lbl.index)[lbl==cr].mean() * pC)  # INDEX FIX
 
-    # 8. CPR + pivot levels
-    pivot = (pH + pL + pC) / 3
-    BC    = (pH + pL) / 2
-    TC    = 2 * pivot - BC
-    cpu   = max(TC, BC)
-    cpl   = min(TC, BC)
-    cpw   = cpu - cpl
-    R1    = 2 * pivot - pL
-    R2    = pivot + (pH - pL)
-    S1    = 2 * pivot - pH
-    S2    = pivot - (pH - pL)
+    m_down = float(Tp.loc[cr,"Bear"])
+    m_side = float(Tp.loc[cr,"Sideways"])
+    m_up   = float(Tp.loc[cr,"Bull"])
 
-    vh = (vix / 100) * pC * (1 / math.sqrt(252)) * vix_mult / 2
-    ub = round(pC + vh * 2, 0)
-    lb = round(pC - vh * 2, 0)
+    # ── 6. CPR + LEVELS ─────────────────────────────────────────────────────
+    p = load_params()
+    vix_mult = p.get("vix_range_mult", 1.5)
+    mw = p.get("markov_weight", 0.60)
+    iw = 1.0 - mw
 
-    # 9. Probability model
-    m_down = float(Tp.loc[cr, "Bear"])
-    m_side = float(Tp.loc[cr, "Sideways"])
-    m_up   = float(Tp.loc[cr, "Bull"])
+    pivot = (pH+pL+pC)/3
+    BC    = (pH+pL)/2
+    TC    = 2*pivot - BC
+    cpu   = max(TC,BC); cpl = min(TC,BC); cpw = cpu-cpl
+    R1=2*pivot-pL; R2=pivot+(pH-pL)
+    S1=2*pivot-pH; S2=pivot-(pH-pL)
 
-    # Intraday component from gap + VIX
-    gap_pct = (pC - prev2_close) / prev2_close * 100
-    if   gap_pct >  1.0:  i_up, i_side, i_down = 0.45, 0.33, 0.22
-    elif gap_pct >  0.3:  i_up, i_side, i_down = 0.40, 0.35, 0.25
-    elif gap_pct < -1.0:  i_up, i_side, i_down = 0.22, 0.33, 0.45
-    elif gap_pct < -0.3:  i_up, i_side, i_down = 0.25, 0.35, 0.40
-    else:                 i_up, i_side, i_down = 0.35, 0.38, 0.27
+    vix_half = (vix/100)*pC*(1/math.sqrt(252))*vix_mult/2
+    exp_high = round(pC + vix_half*2)
+    exp_low  = round(pC - vix_half*2)
+    exp_rng  = exp_high - exp_low
 
-    if   vix < 14: i_side += 0.05; i_up -= 0.03; i_down -= 0.02
-    elif vix > 22: i_side -= 0.05; i_up += 0.02; i_down += 0.03
+    # ── 7. FIVE-FACTOR INTRADAY SCORING ─────────────────────────────────────
+    # Each factor scored 0-1 (0=bearish,0.5=neutral,1=bullish)
 
-    # Merge
-    pd_ = mw * m_down + iw * i_down
-    ps_ = mw * m_side + iw * i_side
-    pu  = mw * m_up   + iw * i_up
+    # F1: Price Action & Gap Context (35%)
+    global_avg = (sp*0.4 + nk*0.3 + hs*0.2 + nq*0.1)
+    f1 = max(0.0, min(1.0, 0.5 + global_avg/8))
 
-    # News overlay
-    if news_bias == "Bullish" and impact_adj > 0:
-        pu  += impact_adj; pd_ -= impact_adj * 0.6; ps_ -= impact_adj * 0.4
-    elif news_bias == "Bearish" and impact_adj > 0:
-        pd_ += impact_adj; pu  -= impact_adj * 0.6; ps_ -= impact_adj * 0.4
+    # F2: India VIX (20%) — lower VIX = more bullish
+    f2 = max(0.0, min(1.0, 0.5 + (18-vix)/20))
 
-    # FII flow adjustment
-    if fii_net is not None:
-        if   fii_net >  2000: pu += 0.03; pd_ -= 0.03
-        elif fii_net >   500: pu += 0.02; pd_ -= 0.02
-        elif fii_net < -2000: pd_ += 0.03; pu -= 0.03
-        elif fii_net <  -500: pd_ += 0.02; pu -= 0.02
+    # F3: Derivatives/CPR (20%) — narrow CPR → trending; skew by regime
+    regime_skew = {"Bull":0.65,"Sideways":0.50,"Bear":0.35}.get(cr,0.5)
+    cpr_skew    = 0.65 if cpw<30 else (0.35 if cpw>60 else 0.5)
+    f3 = (regime_skew*0.6 + cpr_skew*0.4)
 
-    # Normalise to 100%
-    tot = pd_ + ps_ + pu
-    pd_ /= tot; ps_ /= tot; pu /= tot
+    # F4: Global & Macro (15%)
+    macro_score = 0.5 + global_avg/10
+    if brent > 100: macro_score -= 0.10
+    if usdinr > 86: macro_score -= 0.05
+    f4 = max(0.0, min(1.0, macro_score))
 
-    # 10. Strikes
-    ca = max(cpu, pC + vh)
-    cs = math.ceil((ca + p["call_buffer_pts"]) / 50) * 50
-    if cs <= ca: cs += 50
+    # F5: FII/DII (10%)
+    flow = fii_net + dii_net*0.5
+    f5 = max(0.0, min(1.0, 0.5 + flow/5000))
 
-    pa = min(S2, pC - vh)
-    ps_strike = math.floor((pa - p["put_buffer_pts"]) / 50) * 50
-    if ps_strike >= pa: ps_strike -= 50
+    intraday_bull = f1*0.35 + f2*0.20 + f3*0.20 + f4*0.15 + f5*0.10
+    # Decompose into up/side/down
+    i_up   = max(0.0, (intraday_bull - 0.5)*1.8)
+    i_down = max(0.0, (0.5 - intraday_bull)*1.8)
+    i_side = max(0.1, 1.0 - i_up - i_down)
+    tot_i  = i_up + i_down + i_side
+    i_up/=tot_i; i_down/=tot_i; i_side/=tot_i
 
-    if cr == "Bear" and pers > 0.83: ps_strike -= 50
-    if cr == "Bull" and pers > 0.85: cs        += 50
-    if esc > 0.20:                   cs += 50; ps_strike -= 50
+    # ── 8. NEWS OVERLAY ──────────────────────────────────────────────────────
+    news_adj = {"High":0.10,"Medium":0.05,"Low":0.0}.get(n_impact,0.0)
+    if n_sent == "Bearish": news_adj = -news_adj
 
-    # 11. Labels
-    re_icon   = {"Bear": "🔴", "Sideways": "🟡", "Bull": "🟢"}.get(cr, "")
-    dt_label  = {"Bear": "Sell-on-rise", "Sideways": "Range-selling", "Bull": "Buy-on-dip"}.get(cr, "")
-    vix_label = ("Very Low" if vix < 12 else "Normal" if vix < 16 else
-                 "Elevated" if vix < 20 else "High" if vix < 25 else "Extreme")
-    news_icon = {"Bullish": "🟢", "Bearish": "🔴", "Neutral": "🟡"}.get(news_bias, "⚪")
-    imp_icon  = {"High": "⚡", "Medium": "🔔", "Low": "📎"}.get(impact_level, "")
-    sg = "+" if sp >= 0 else ""
-    ng = "+" if nk >= 0 else ""
+    # ── 9. FINAL MERGED PROBABILITIES ────────────────────────────────────────
+    pu = mw*m_up   + iw*i_up   + (news_adj if news_adj>0 else 0)
+    pd_= mw*m_down + iw*i_down + (abs(news_adj) if news_adj<0 else 0)
+    ps_= mw*m_side + iw*i_side
 
-    # 12. Message 1 — Regime + Levels + Strikes
-    m1 = (
-        f"<b>NIFTY PRE-MARKET — {today_str}</b>\n\n"
-        f"<b>REGIME: {cr}</b> {re_icon}\n"
-        f"Persistence: <b>{pers:.1%}</b>  Escape: {esc:.1%}  ~{days_left}d left\n"
-        f"Expected drift: <b>{drift:+.0f} pts/day</b>\n\n"
-        f"<b>KEY LEVELS</b>\n"
-        f"<code>"
-        f"Prev Close : {pC:.0f}\n"
-        f"CPR        : {cpl:.0f} - {cpu:.0f}  (W:{cpw:.0f})\n"
-        f"Pivot      : {pivot:.0f}\n"
-        f"R1 / R2    : {R1:.0f}  /  {R2:.0f}\n"
-        f"S1 / S2    : {S1:.0f}  /  {S2:.0f}\n"
-        f"VIX        : {vix:.1f}  [{vix_label}]\n"
-        f"Day Range  : {lb:.0f} - {ub:.0f}  ({(ub-lb):.0f} pts)"
-        f"</code>\n\n"
-        f"<b>OPTION SELLER STRIKES</b>\n"
-        f"SELL CALL : <b>{cs} CE</b>  ({cs-pC:.0f} pts OTM)\n"
-        f"SELL PUT  : <b>{ps_strike} PE</b>  ({pC-ps_strike:.0f} pts OTM)\n"
-        f"Entry: 9:30-10:00 AM | Stop: 15-min close beyond strike"
+    tot = pu+pd_+ps_
+    prob_up   = round(pu/tot*100)
+    prob_down = round(pd_/tot*100)
+    prob_side = 100-prob_up-prob_down
+
+    # ── 10. STRIKES ──────────────────────────────────────────────────────────
+    cb = p.get("call_buffer_pts",15); pb2 = p.get("put_buffer_pts",50)
+    ca = max(cpu, pC+vix_half)
+    cs = math.ceil((ca+cb)/50)*50
+    if cs<=ca: cs+=50
+    pa = min(S2, pC-vix_half)
+    ps = math.floor((pa-pb2)/50)*50
+    if ps>=pa: ps-=50
+    if cr=="Bear" and pers>0.83: ps-=50
+    if cr=="Bull" and pers>0.85: cs+=50
+    if esc>0.20: cs+=50; ps-=50
+    call_otm = cs-pC; put_otm = pC-ps
+
+    # ── 11. CONFIDENCE SCORES ────────────────────────────────────────────────
+    # Range: VIX stability + regime persistence
+    conf_range  = round(min(88, 38 + pers*30 + max(0,(20-vix))*1.2))
+
+    # Direction: leading probability
+    lead_prob = max(prob_up, prob_down, prob_side)
+    conf_dir  = lead_prob
+
+    # Seller: how far strikes sit outside the VIX-implied range
+    call_margin_pct = (cs-exp_high)/pC*100
+    put_margin_pct  = (exp_low-ps)/pC*100
+    conf_seller = round(min(88, 50 + min(call_margin_pct,put_margin_pct)*6))
+    conf_seller = max(30, conf_seller)
+
+    # Buyer: only high when strong directional signal exists
+    conf_buyer = round(min(82, max(prob_up,prob_down)*1.1)) if max(prob_up,prob_down)>52 else max(prob_up,prob_down)
+
+    # Futures: directional × regime persistence
+    conf_futures = round(min(82, max(prob_up,prob_down)*pers*1.1))
+
+    # Overall: weighted composite
+    conf_overall = round(conf_range*0.15 + conf_dir*0.25 + conf_seller*0.20 +
+                         conf_buyer*0.20 + conf_futures*0.20)
+
+    # ── 12. LABELS & GUIDANCE ────────────────────────────────────────────────
+    ri = {"Bear":"🔴","Sideways":"🟡","Bull":"🟢"}.get(cr,"")
+    fii_lbl = "Buying" if fii_net>500 else("Selling" if fii_net<-500 else "Neutral")
+
+    if prob_up>=prob_down and prob_up>=prob_side:
+        dir_lbl="CLOSE > OPEN"; dir_icon="⬆️"
+    elif prob_down>prob_up and prob_down>=prob_side:
+        dir_lbl="CLOSE < OPEN"; dir_icon="⬇️"
+    else:
+        dir_lbl="CLOSE ≈ OPEN"; dir_icon="↔️"
+
+    # Directional option seller skew
+    if   cr=="Bear" and pers>0.83:
+        dir_skew = f"Lean SHORT: focus {ps} PE\nCall strike is safety hedge only"
+    elif cr=="Bull" and pers>0.85:
+        dir_skew = f"Lean LONG: focus {cs} CE\nPut strike is safety hedge only"
+    elif esc>0.20:
+        dir_skew = "Regime unstable — keep both legs, no lean"
+    else:
+        dir_skew = "Symmetric — no strong directional lean"
+
+    # Option buyer
+    if prob_up>55:
+        buyer = f"BUY CALL — {cs-100} CE (ATM-1)\nEntry: Confirm open above CPR {cpu:.0f}\nTarget: {round(pC+vix_half*1.5)} | SL: below {round(pC-vix_half*0.5)}"
+    elif prob_down>55:
+        buyer = f"BUY PUT — {ps+100} PE (ATM-1)\nEntry: Confirm open below CPR {cpl:.0f}\nTarget: {round(pC-vix_half*1.5)} | SL: above {round(pC+vix_half*0.5)}"
+    else:
+        buyer = f"WAIT — no clear edge\nAct only on confirmed break above {exp_high} (calls)\nor below {exp_low} (puts)"
+
+    # Futures
+    if prob_up>55:
+        fut = f"LONG | Entry dip: {round(pC-vix_half*0.4)}-{round(pC)}\nStop: {round(pC-vix_half*0.8)} | Tgt: {round(pC+vix_half*1.5)}\nWindow: 9:30-11 AM"
+    elif prob_down>55:
+        fut = f"SHORT | Entry rise: {round(pC)}-{round(pC+vix_half*0.4)}\nStop: {round(pC+vix_half*0.8)} | Tgt: {round(pC-vix_half*1.5)}\nWindow: 9:30-11 AM"
+    else:
+        fut = f"FADE EXTREMES | Buy near {exp_low+50} / Sell near {exp_high-50}\nNo breakout trades until range is confirmed\nWindow: 10 AM-1 PM"
+
+    # ── 13. BUILD MESSAGES ───────────────────────────────────────────────────
+    msg1 = (
+        f"<b>NIFTY PRE-MARKET {today_disp}</b>\n"
+        f"Ref Price (Prev Close): <b>{pC:.0f}</b>\n"
+        f"Regime: <b>{cr}</b> {ri} | Persist: {pers:.0%} | VIX: {vix:.1f} [{vix_lbl}]\n"
+        f"Drift: {drift:+.0f} pts/day | Escape prob: {esc:.0%}\n"
+        f"Global: S&amp;P {sp:+.1f}% Nsdq {nq:+.1f}% Nikkei {nk:+.1f}% HSI {hs:+.1f}%\n"
+        f"Brent: ${brent:.0f} | USD/INR: {usdinr:.1f} | FII: {fii_lbl}\n"
+        f"News: {n_sent} ({n_impact} impact, score {n_score:+.2f})\n\n"
+
+        f"<b>1. EXPECTED DAY RANGE</b>\n"
+        f"High: <b>{exp_high}</b> | Low: <b>{exp_low}</b> | Width: {exp_rng} pts\n"
+        f"CPR: {cpl:.0f}–{cpu:.0f} (W:{cpw:.0f}) | Pivot: {pivot:.0f}\n"
+        f"R1/R2: {R1:.0f} / {R2:.0f} | S1/S2: {S1:.0f} / {S2:.0f}\n"
+        f"Confidence: <b>{conf_range}%</b>\n\n"
+
+        f"<b>2. CLOSE vs OPEN</b>\n"
+        f"{dir_icon} <b>{dir_lbl}</b>\n"
+        f"Up: {prob_up}% | Side: {prob_side}% | Down: {prob_down}%\n"
+        f"(Markov {mw:.0%} + Intraday {iw:.0%} + News overlay)\n"
+        f"Confidence: <b>{conf_dir}%</b>"
     )
 
-    # 13. Message 2 — Probability + Global
-    m2 = (
-        f"<b>PROBABILITY  (base {pC:.0f})</b>\n"
-        f"Upside:   <b>{pu:.0%}</b>\n"
-        f"Sideways: <b>{ps_:.0%}</b>\n"
-        f"Downside: <b>{pd_:.0%}</b>\n"
-        f"<i>Markov {mw:.0%} + Intraday {iw:.0%}"
-        + (f" + {news_bias} news {impact_adj:.0%}" if impact_adj > 0 else "")
-        + "</i>\n\n"
-        f"<b>GLOBAL CUES</b>\n"
-        f"S&amp;P500: {sg}{sp:.1f}%  Nasdaq: {nq:+.1f}%\n"
-        f"Nikkei: {ng}{nk:.1f}%  HSI: {hs:+.1f}%\n"
-        f"Brent: ${brent:.1f}  USD/INR: {usdinr:.2f}\n\n"
-        f"<b>TRADE GUIDANCE — {dt_label}</b>\n"
-        f"Sellers : {cs} CE / {ps_strike} PE strangle, entry 9:30-10 AM\n"
-        f"Buyers  : {'Puts on bounce' if cr=='Bear' else 'Calls on dip' if cr=='Bull' else 'Wait for breakout'}\n"
-        f"Futures : {'Short on rise' if cr=='Bear' else 'Long on dip' if cr=='Bull' else 'Fade range extremes'}"
+    msg2 = (
+        f"<b>3. OPTION SELLER</b>\n"
+        f"Non-Directional Strangle:\n"
+        f"  SELL CALL <b>{cs} CE</b> ({call_otm:.0f} pts OTM)\n"
+        f"  SELL PUT  <b>{ps} PE</b>  ({put_otm:.0f} pts OTM)\n"
+        f"  Entry: 9:30-10:00 AM\n"
+        f"  Stop: 15-min close beyond either strike\n"
+        f"Directional lean: {dir_skew}\n"
+        f"Confidence: <b>{conf_seller}%</b>\n\n"
+
+        f"<b>4. OPTION BUYER</b>\n"
+        f"{buyer}\n"
+        f"Confidence: <b>{conf_buyer}%</b>\n\n"
+
+        f"<b>5. FUTURES TRADER</b>\n"
+        f"{fut}\n"
+        f"Confidence: <b>{conf_futures}%</b>\n\n"
+
+        f"<b>OVERALL CONFIDENCE: {conf_overall}%</b>\n"
+        f"Markov+CPR+VIX+News+FII | {today_disp} | GitHub Actions"
     )
 
-    # 14. Message 3 — News & Sentiment + FII/DII
-    hdl_lines = "\n".join(
-        f"  {i+1}. {h[:88]}" for i, h in enumerate(headlines[:6])
-    ) if headlines else "  (Headlines unavailable)"
-
-    m3 = (
-        f"<b>NEWS &amp; SENTIMENT</b>\n"
-        f"{news_icon} Overall bias: <b>{news_bias}</b>  (score {news_score:+.2f})\n"
-        f"{imp_icon} Impact level: <b>{impact_level}</b>"
-        + (f"  → prob adj {impact_adj:+.0%}" if impact_adj > 0 else " → no prob adjustment")
-        + f"\n\n<b>Top Headlines</b>\n{hdl_lines}\n\n"
-        f"<b>INSTITUTIONAL FLOWS (prev day)</b>\n"
-        f"FII: {fii_label(fii_net)}\n"
-        f"DII: {fii_label(dii_net)}\n\n"
-        f"<i>Markov + CPR + News + FII | {today_str} | GitHub Actions</i>"
-    )
-
-    tele(m1)
-    tele(m2)
-    tele(m3)
-    print(f"Sent | Regime:{cr} | News:{news_bias}({impact_level}) | FII:{fii_net} | pu:{pu:.0%} ps:{ps_:.0%} pd:{pd_:.0%}")
-
+    tele(msg1); tele(msg2)
+    print(f"Sent | {cr} | Up:{prob_up}% Side:{prob_side}% Down:{prob_down}% | Overall:{conf_overall}%")
 
 if __name__ == "__main__":
     main()

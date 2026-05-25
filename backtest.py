@@ -159,7 +159,7 @@ def main():
     cr   = lbl_prev.iloc[-1]
     pers = float(Tp.loc[cr, cr])
     esc  = 1.0 - pers
-    drift = float(ret[lbl_prev == cr].mean() * pC)
+    drift = float(ret.reindex(lbl_prev.index)[lbl_prev == cr].mean() * pC)
 
     actual_cr        = lbl.iloc[-1]
     regime_persisted = (actual_cr == cr)

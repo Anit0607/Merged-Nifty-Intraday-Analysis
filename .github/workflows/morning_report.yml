@@ -1,27 +1,27 @@
 name: Morning Report
-
 on:
   schedule:
-    # 03:40 UTC = 09:10 AM IST (Mon-Fri)
     - cron: '40 3 * * 1-5'
   workflow_dispatch:
-
+permissions:
+  contents: write
 jobs:
   run-report:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
         with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install yfinance numpy pandas requests pytz nltk feedparser
-
-      - name: Run morning report
-        run: python morning_report.py
+          persist-credentials: true
+          token: "${{ secrets.GITHUB_TOKEN }}"
+      - uses: actions/setup-python@v4
+        with: {python-version: '3.11'}
+      - run: pip install yfinance numpy pandas requests pytz nltk feedparser
+      - run: python morning_report.py
+      - name: Commit and push session_state.json
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add session_state.json
+          git diff --staged --quiet || git commit -m "Morning session state: $(date +'%Y-%m-%d')"
+          git push

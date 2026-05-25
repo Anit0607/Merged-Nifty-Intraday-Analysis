@@ -193,7 +193,7 @@ def main():
     pers      = float(Tp.loc[cr, cr])
     esc       = 1.0 - pers
     days_left = round(1 / (1 - pers), 1) if pers < 1 else 999
-    drift     = float(ret[lbl == cr].mean() * pC)
+    drift     = float(ret.reindex(lbl.index)[lbl == cr].mean() * pC)
 
     # 7. Params
     try:

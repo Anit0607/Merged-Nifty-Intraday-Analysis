@@ -15,6 +15,7 @@ TELE_CHAT  = 1083142887
 RESULTS_FILE   = "results.csv"
 LEARNINGS_FILE = "learnings.md"
 PARAMS_FILE    = "params.json"
+SESSION_FILE   = "session_state.json"
 
 RESULTS_HEADER = [
     "date","regime","actual_next_regime","regime_persisted",
@@ -33,12 +34,12 @@ RESULTS_HEADER = [
 def tele(text):
     try:
         requests.post(
-            f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage",
+            "https://api.telegram.org/bot" + TELE_TOKEN + "/sendMessage",
             json={"chat_id": TELE_CHAT, "text": text, "parse_mode": "HTML"},
             timeout=10
         )
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print("Telegram error: " + str(e))
 
 
 def load_params():
@@ -90,7 +91,7 @@ def main():
     today_str  = today.strftime("%Y-%m-%d")
     today_disp = today.strftime("%d %b %Y")
 
-    # 1. Fetch Nifty data
+    # 1. Fetch Nifty data (dual-fetch to avoid yfinance staleness)
     df_long  = yf.Ticker("^NSEI").history(period="10y")[["Open","High","Low","Close"]].dropna()
     df_fresh = yf.Ticker("^NSEI").history(period="1d")[["Open","High","Low","Close"]].dropna()
     df = pd.concat([df_long, df_fresh])
@@ -99,43 +100,80 @@ def main():
 
     if last_date != today_date:
         tele(
-            f"<b>BACKTEST SKIPPED — {today_disp}</b>\n"
-            f"yfinance last date: {last_date}\n"
-            f"Expected: {today_date}\n"
+            "<b>BACKTEST SKIPPED - " + today_disp + "</b>\n"
+            "yfinance last date: " + str(last_date) + "\n"
+            "Expected: " + str(today_date) + "\n"
             "Market may be closed or data not yet updated."
         )
-        print(f"No data for {today_date}. Last available: {last_date}")
+        print("No data for " + str(today_date) + ". Last available: " + str(last_date))
         return
 
     today_row = df.iloc[-1]
-    prev_row  = df.iloc[-2]
+    tO = float(today_row.Open)
+    tH = float(today_row.High)
+    tL = float(today_row.Low)
+    tC = float(today_row.Close)
 
-    pH, pL, pC = float(prev_row.High),  float(prev_row.Low),  float(prev_row.Close)
-    tO, tH, tL, tC = (float(today_row.Open), float(today_row.High),
-                      float(today_row.Low),  float(today_row.Close))
+    # 2. Load session_state.json (written by morning_report.py at 9:10 AM)
+    # Gives correct prev-day OHLC/CPR/strikes even when yfinance period=10y is stale
+    session_ok = False
+    ss = {}
+    try:
+        with open(SESSION_FILE) as f:
+            ss = json.load(f)
+        if ss.get("date_iso") == today_str:
+            session_ok = True
+            print("session_state.json OK: prev_close=" + str(ss["prev_close"]) +
+                  ", call=" + str(ss["call_strike"]) + ", put=" + str(ss["put_strike"]))
+        else:
+            print("session_state.json date mismatch: " + str(ss.get("date_iso")) +
+                  " != " + today_str + ", fallback to yfinance")
+    except Exception as e:
+        print("session_state.json not available (" + str(e) + "), fallback to yfinance")
 
-    # 2. VIX
+    # 3. Prev-day OHLC: prefer session_state (accurate) over df.iloc[-2] (may be stale)
+    if session_ok:
+        pH = float(ss["prev_high"])
+        pL = float(ss["prev_low"])
+        pC = float(ss["prev_close"])
+    else:
+        prev_row = df.iloc[-2]
+        pH = float(prev_row.High)
+        pL = float(prev_row.Low)
+        pC = float(prev_row.Close)
+
+    # 4. VIX
     try:
         vdf = yf.Ticker("^INDIAVIX").history(period="10d")["Close"].dropna()
         vix = float(vdf.iloc[-2] if len(vdf) >= 2 else vdf.iloc[-1])
     except Exception:
-        vix = 19.5
+        vix = float(ss.get("vix", 19.5)) if session_ok else 19.5
 
-    # 3. Load params
+    # 5. Load params
     p = load_params()
     vix_mult = p.get("vix_range_mult", 1.5)
 
-    # 4. CPR + pivot levels
-    pivot = (pH + pL + pC) / 3
-    BC    = (pH + pL) / 2
-    TC    = 2 * pivot - BC
-    cpu   = max(TC, BC)
-    cpl   = min(TC, BC)
-    cpw   = cpu - cpl
-    R1    = 2 * pivot - pL
-    R2    = pivot + (pH - pL)
-    S1    = 2 * pivot - pH
-    S2    = pivot - (pH - pL)
+    # 6. CPR + pivot levels: prefer session_state over recomputing from stale prev_row
+    if session_ok:
+        cpu   = float(ss["cpr_upper"])
+        cpl   = float(ss["cpr_lower"])
+        cpw   = float(ss["cpw"])
+        pivot = float(ss["pivot"])
+        R1    = float(ss["r1"])
+        R2    = float(ss["r2"])
+        S1    = float(ss["s1"])
+        S2    = float(ss["s2"])
+    else:
+        pivot = (pH + pL + pC) / 3
+        BC    = (pH + pL) / 2
+        TC    = 2 * pivot - BC
+        cpu   = max(TC, BC)
+        cpl   = min(TC, BC)
+        cpw   = cpu - cpl
+        R1    = 2 * pivot - pL
+        R2    = pivot + (pH - pL)
+        S1    = 2 * pivot - pH
+        S2    = pivot - (pH - pL)
 
     if   tO > cpu + 50:  open_vs_cpr = "strong_above_cpr"
     elif tO > cpu + 10:  open_vs_cpr = "above_cpr"
@@ -144,9 +182,10 @@ def main():
     else:                open_vs_cpr = "below_cpr"
 
     gap_pct = (tO - pC) / pC * 100
-    gap_str = f"{gap_pct:+.2f}%"
+    gap_sign = "+" if gap_pct >= 0 else ""
+    gap_str  = gap_sign + "{:.2f}%".format(gap_pct)
 
-    # 5. Markov
+    # 7. Markov (always computed fresh - needed for actual_cr)
     ret  = df["Close"].pct_change().dropna()
     rm   = ret.rolling(20).mean().dropna()
     p33, p67 = float(np.percentile(rm, 33)), float(np.percentile(rm, 67))
@@ -159,30 +198,37 @@ def main():
         T.loc[lbl_prev.iloc[i], lbl_prev.iloc[i+1]] += 1
     Tp = T.div(T.sum(axis=1), axis=0)
 
-    cr   = lbl_prev.iloc[-1]
-    pers = float(Tp.loc[cr, cr])
-    esc  = 1.0 - pers
-    drift = float(ret.reindex(lbl_prev.index)[lbl_prev == cr].mean() * pC)
+    # Regime: prefer session_state (matched to morning analysis)
+    if session_ok:
+        cr   = ss["regime"]
+        pers = float(ss["persistence"])
+        esc  = float(ss["escape"])
+    else:
+        cr   = lbl_prev.iloc[-1]
+        pers = float(Tp.loc[cr, cr])
+        esc  = 1.0 - pers
 
     actual_cr        = lbl.iloc[-1]
     regime_persisted = (actual_cr == cr)
+    drift = float(ret.reindex(lbl_prev.index)[lbl_prev == cr].mean() * pC)
 
-    # 6. Strike computation
-    vix_half = (vix / 100) * pC * (1 / math.sqrt(252)) * vix_mult / 2
+    # 8. Strike computation: prefer session_state (same strikes morning used)
+    if session_ok:
+        cs        = int(ss["call_strike"])
+        ps_strike = int(ss["put_strike"])
+    else:
+        vix_half = (vix / 100) * pC * (1 / math.sqrt(252)) * vix_mult / 2
+        ca = max(cpu, pC + vix_half)
+        cs = math.ceil((ca + p["call_buffer_pts"]) / 50) * 50
+        if cs <= ca: cs += 50
+        pa = min(S2, pC - vix_half)
+        ps_strike = math.floor((pa - p["put_buffer_pts"]) / 50) * 50
+        if ps_strike >= pa: ps_strike -= 50
+        if cr == "Bear" and pers > 0.83: ps_strike -= 50
+        if cr == "Bull" and pers > 0.85: cs        += 50
+        if esc > 0.20:                   cs += 50; ps_strike -= 50
 
-    ca = max(cpu, pC + vix_half)
-    cs = math.ceil((ca + p["call_buffer_pts"]) / 50) * 50
-    if cs <= ca: cs += 50
-
-    pa = min(S2, pC - vix_half)
-    ps_strike = math.floor((pa - p["put_buffer_pts"]) / 50) * 50
-    if ps_strike >= pa: ps_strike -= 50
-
-    if cr == "Bear" and pers > 0.83: ps_strike -= 50
-    if cr == "Bull" and pers > 0.85: cs        += 50
-    if esc > 0.20:                   cs += 50; ps_strike -= 50
-
-    # 7. Score
+    # 9. Score
     call_survived       = bool(tH < cs)
     put_survived        = bool(tL > ps_strike)
     strangle_profitable = call_survived and put_survived
@@ -198,7 +244,11 @@ def main():
     vix_implied_range = round((vix / 100) * pC * (1 / math.sqrt(252)) * vix_mult, 1)
     range_ratio       = round(actual_range / vix_implied_range, 3) if vix_implied_range > 0 else 1.0
 
-    # 8. Append to results.csv
+    # helpers for string formatting
+    def fmt(v): return ("+" if v >= 0 else "") + "{:.1f}".format(v)
+    def fmti(v): return ("+" if v >= 0 else "") + str(round(v))
+
+    # 10. Append to results.csv
     row = {
         "date":              today_str,
         "regime":            cr,
@@ -223,13 +273,13 @@ def main():
         "call_survived":     str(call_survived),
         "put_survived":      str(put_survived),
         "strangle_profitable": str(strangle_profitable),
-        "call_margin":       f"{call_margin:+.1f}",
-        "put_margin":        f"{put_margin:+.1f}",
+        "call_margin":       fmt(call_margin),
+        "put_margin":        fmt(put_margin),
         "predicted_direction": predicted_direction,
         "actual_direction":  actual_direction,
         "direction_correct": str(direction_correct),
-        "expected_drift_pts": f"{drift:+.1f}",
-        "actual_drift_pts":  f"{(tC - tO):+.1f}",
+        "expected_drift_pts": fmt(drift),
+        "actual_drift_pts":  fmt(tC - tO),
         "actual_range":      actual_range,
         "vix_implied_range": vix_implied_range,
         "actual_range_ratio":range_ratio,
@@ -246,7 +296,7 @@ def main():
             writer.writeheader()
         writer.writerow(row)
 
-    # 9. Rolling stats
+    # 11. Rolling stats
     results_df = pd.read_csv(RESULTS_FILE)
     n          = len(results_df)
     window     = results_df.tail(10)
@@ -257,27 +307,33 @@ def main():
     win_rate   = (window["strangle_profitable"] == "True").sum() / nw
     regime_acc = (window["direction_correct"]   == "True").sum() / nw
 
-    # 10. Learnings.md
+    # 12. Learnings.md
     pnl_label = ("PROFIT"  if strangle_profitable else
                  "PARTIAL" if (call_survived or put_survived) else "LOSS")
-    ci = "SAFE"     if call_survived else "BREACHED"
-    pi = "SAFE"     if put_survived  else "BREACHED"
+    ci = "SAFE"    if call_survived else "BREACHED"
+    pi = "SAFE"    if put_survived  else "BREACHED"
+    ss_src  = "session_state" if session_ok else "yfinance-fallback"
+    dc_word = "CORRECT" if direction_correct else "WRONG"
+    rp_word = "PERSISTED" if regime_persisted else "TRANSITIONED"
 
     entry = (
-        f"\n## {today_str} | {cr} -> {actual_cr} | {pnl_label}\n"
-        f"| Metric | Value |\n|--------|-------|\n"
-        f"| OHLC | O:{tO:.0f} H:{tH:.0f} L:{tL:.0f} C:{tC:.0f} |\n"
-        f"| Gap | {gap_str} ({open_vs_cpr}) |\n"
-        f"| CPR | {cpl:.0f} - {cpu:.0f} (W={cpw:.0f} pts) |\n"
-        f"| Call {cs} CE | {ci} ({call_margin:+.0f} pts) |\n"
-        f"| Put {ps_strike} PE | {pi} ({put_margin:+.0f} pts) |\n"
-        f"| Range | actual {actual_range:.0f} vs VIX-implied {vix_implied_range:.0f} pts ({range_ratio:.2f}x) |\n"
-        f"| Direction | {predicted_direction} -> {actual_direction} "
-            f"({'CORRECT' if direction_correct else 'WRONG'}) |\n"
-        f"| Regime | {cr} -> {actual_cr} "
-            f"({'PERSISTED' if regime_persisted else 'TRANSITIONED'}) |\n"
-        f"| 10d Win Rate | {win_rate:.0%} "
-            f"(Call: {call_rate:.0%} | Put: {put_rate:.0%}) |\n\n"
+        "\n## " + today_str + " | " + cr + " -> " + str(actual_cr) +
+        " | " + pnl_label + " [" + ss_src + "]\n"
+        "| Metric | Value |\n|--------|-------|\n"
+        "| OHLC | O:" + str(round(tO)) + " H:" + str(round(tH)) +
+        " L:" + str(round(tL)) + " C:" + str(round(tC)) + " |\n"
+        "| Gap | " + gap_str + " (" + open_vs_cpr + ") |\n"
+        "| CPR | " + str(round(cpl)) + " - " + str(round(cpu)) +
+        " (W=" + str(round(cpw)) + " pts) |\n"
+        "| Call " + str(cs) + " CE | " + ci + " (" + fmti(call_margin) + " pts) |\n"
+        "| Put " + str(ps_strike) + " PE | " + pi + " (" + fmti(put_margin) + " pts) |\n"
+        "| Range | actual " + str(round(actual_range)) + " vs VIX-implied " +
+        str(round(vix_implied_range)) + " pts (" + str(range_ratio) + "x) |\n"
+        "| Direction | " + predicted_direction + " -> " + actual_direction +
+        " (" + dc_word + ") |\n"
+        "| Regime | " + cr + " -> " + str(actual_cr) + " (" + rp_word + ") |\n"
+        "| 10d Win Rate | " + str(round(win_rate * 100)) + "% (Call: " +
+        str(round(call_rate * 100)) + "% | Put: " + str(round(put_rate * 100)) + "%) |\n\n"
     )
 
     if os.path.isfile(LEARNINGS_FILE):
@@ -295,16 +351,15 @@ def main():
         with open(LEARNINGS_FILE, "w", encoding="utf-8") as f:
             f.write("# Nifty 50 Strategy Learnings\n\nAuto-generated.\n" + entry)
 
-    # 11. AUTO-HEALING
+    # 13. AUTO-HEALING
     params_changed = False
     change_notes   = []
 
-    # Consecutive loss tracker (no session minimum)
     if strangle_profitable:
         p["consecutive_losses"] = 0
         if p.get("emergency_widen", False):
             p["emergency_widen"] = False
-            change_notes.append("Emergency widen cleared — profit restored")
+            change_notes.append("Emergency widen cleared - profit restored")
             params_changed = True
     else:
         p["consecutive_losses"] = p.get("consecutive_losses", 0) + 1
@@ -313,8 +368,8 @@ def main():
             p["put_buffer_pts"]  = min(p["put_buffer_pts"]  + 50, 300)
             p["emergency_widen"] = True
             change_notes.append(
-                f"EMERGENCY WIDEN ({p['consecutive_losses']} consecutive losses): "
-                f"call_buffer->{p['call_buffer_pts']}, put_buffer->{p['put_buffer_pts']}")
+                "EMERGENCY WIDEN (" + str(p["consecutive_losses"]) + " consecutive losses): "
+                "call_buffer->" + str(p["call_buffer_pts"]) + ", put_buffer->" + str(p["put_buffer_pts"]))
             params_changed = True
 
     if n >= 5:
@@ -324,53 +379,53 @@ def main():
         p["regime_accuracy_10d"]    = round(regime_acc, 3)
         p["last_updated"]           = today_str
 
-        # Rule 1: Call buffer
         if call_rate < 0.70 and not p.get("emergency_widen", False):
             old = p["call_buffer_pts"]
             p["call_buffer_pts"] = min(old + 25, 200)
             if p["call_buffer_pts"] != old:
-                change_notes.append(f"call_buffer {old}->{p['call_buffer_pts']} (call {call_rate:.0%}<70%)")
+                change_notes.append("call_buffer " + str(old) + "->" + str(p["call_buffer_pts"]) +
+                    " (call " + str(round(call_rate*100)) + "%<70%)")
                 params_changed = True
         elif call_rate > 0.90 and p["call_buffer_pts"] > 15:
             old = p["call_buffer_pts"]
             p["call_buffer_pts"] = max(old - 10, 15)
             if p["call_buffer_pts"] != old:
-                change_notes.append(f"call_buffer {old}->{p['call_buffer_pts']} (call {call_rate:.0%}>90% tighten)")
+                change_notes.append("call_buffer " + str(old) + "->" + str(p["call_buffer_pts"]) +
+                    " (call " + str(round(call_rate*100)) + "%>90% tighten)")
                 params_changed = True
 
-        # Rule 2: Put buffer
         if put_rate < 0.70 and not p.get("emergency_widen", False):
             old = p["put_buffer_pts"]
             p["put_buffer_pts"] = min(old + 25, 200)
             if p["put_buffer_pts"] != old:
-                change_notes.append(f"put_buffer {old}->{p['put_buffer_pts']} (put {put_rate:.0%}<70%)")
+                change_notes.append("put_buffer " + str(old) + "->" + str(p["put_buffer_pts"]) +
+                    " (put " + str(round(put_rate*100)) + "%<70%)")
                 params_changed = True
         elif put_rate > 0.90 and p["put_buffer_pts"] > 25:
             old = p["put_buffer_pts"]
             p["put_buffer_pts"] = max(old - 10, 25)
             if p["put_buffer_pts"] != old:
-                change_notes.append(f"put_buffer {old}->{p['put_buffer_pts']} (put {put_rate:.0%}>90% tighten)")
+                change_notes.append("put_buffer " + str(old) + "->" + str(p["put_buffer_pts"]) +
+                    " (put " + str(round(put_rate*100)) + "%>90% tighten)")
                 params_changed = True
 
-        # Rule 3: Markov weight self-correction
         if regime_acc < 0.45:
             old_mw = p["markov_weight"]
             p["markov_weight"]   = round(max(0.35, p["markov_weight"] - 0.05), 2)
             p["intraday_weight"] = round(1.0 - p["markov_weight"], 2)
             if p["markov_weight"] != old_mw:
-                change_notes.append(
-                    f"markov_weight {old_mw}->{p['markov_weight']} (direction {regime_acc:.0%}<45%, trust intraday more)")
+                change_notes.append("markov_weight " + str(old_mw) + "->" + str(p["markov_weight"]) +
+                    " (direction " + str(round(regime_acc*100)) + "%<45%, trust intraday more)")
                 params_changed = True
         elif regime_acc > 0.65:
             old_mw = p["markov_weight"]
             p["markov_weight"]   = round(min(0.75, p["markov_weight"] + 0.05), 2)
             p["intraday_weight"] = round(1.0 - p["markov_weight"], 2)
             if p["markov_weight"] != old_mw:
-                change_notes.append(
-                    f"markov_weight {old_mw}->{p['markov_weight']} (direction {regime_acc:.0%}>65%, trust Markov more)")
+                change_notes.append("markov_weight " + str(old_mw) + "->" + str(p["markov_weight"]) +
+                    " (direction " + str(round(regime_acc*100)) + "%>65%, trust Markov more)")
                 params_changed = True
 
-        # Rule 4: VIX range multiplier
         if "actual_range_ratio" in results_df.columns:
             recent_ratios = pd.to_numeric(window["actual_range_ratio"], errors="coerce").dropna()
             if len(recent_ratios) >= 5:
@@ -379,55 +434,67 @@ def main():
                 if med > 1.3:
                     p["vix_range_mult"] = round(min(2.5, old_mult + 0.1), 2)
                     if p["vix_range_mult"] != old_mult:
-                        change_notes.append(
-                            f"vix_range_mult {old_mult}->{p['vix_range_mult']} (actual {med:.2f}x VIX-implied, widen strikes)")
+                        change_notes.append("vix_range_mult " + str(old_mult) + "->" +
+                            str(p["vix_range_mult"]) + " (actual " + str(round(med,2)) + "x VIX-implied, widen)")
                         params_changed = True
                 elif med < 0.7:
                     p["vix_range_mult"] = round(max(1.0, old_mult - 0.1), 2)
                     if p["vix_range_mult"] != old_mult:
-                        change_notes.append(
-                            f"vix_range_mult {old_mult}->{p['vix_range_mult']} (actual only {med:.2f}x VIX-implied, tighten)")
+                        change_notes.append("vix_range_mult " + str(old_mult) + "->" +
+                            str(p["vix_range_mult"]) + " (actual only " + str(round(med,2)) + "x VIX-implied, tighten)")
                         params_changed = True
 
     if change_notes:
         p["notes"] = " | ".join(change_notes)
     save_params(p)
 
-    # 12. Telegram
-    ri  = {"Bear": "🔴", "Sideways": "🟡", "Bull": "🟢"}.get(cr, "")
-    ok  = ("✅✅" if strangle_profitable else
-           "⚠️"  if (call_survived or put_survived) else "❌❌")
-    ci2 = "✅" if call_survived else "❌"
-    pi2 = "✅" if put_survived  else "❌"
+    # 14. Telegram
+    ri_map = {"Bear": chr(0x1F534), "Sideways": chr(0x1F7E1), "Bull": chr(0x1F7E2)}
+    ri  = ri_map.get(cr, "")
+    ck  = chr(0x2705)
+    cx  = chr(0x274C)
+    warn = chr(0x26A0) + chr(0xFE0F)
+    ok  = (ck + ck) if strangle_profitable else (warn if (call_survived or put_survived) else (cx + cx))
+    ci2 = ck if call_survived else cx
+    pi2 = ck if put_survived  else cx
     label = ("BOTH LEGS SAFE" if strangle_profitable
              else "ONE LEG BREACHED" if (call_survived or put_survived)
              else "BOTH LEGS BREACHED")
+    src_note  = " [session_state]" if session_ok else " [yfinance-fallback]"
+    dc_word2  = "CORRECT" if direction_correct else "WRONG"
+    rp_word2  = "Persisted" if regime_persisted else "Transitioned"
 
     msg = (
-        f"<b>NIFTY BACKTEST — {today_disp}</b>\n"
-        f"{ok} <b>{label}</b>\n\n"
-        f"Regime: <b>{cr}</b> {ri} to {actual_cr} "
-            f"({'Persisted' if regime_persisted else 'Transitioned'})\n"
-        f"OHLC: O:{tO:.0f} H:{tH:.0f} L:{tL:.0f} C:{tC:.0f}\n\n"
-        f"<b>STRIKES</b>\n"
-        f"{ci2} CALL {cs} CE  margin: {call_margin:+.0f} pts\n"
-        f"{pi2} PUT  {ps_strike} PE  margin: {put_margin:+.0f} pts\n"
-        f"Range: actual {actual_range:.0f} pts vs VIX-implied {vix_implied_range:.0f} pts ({range_ratio:.2f}x)\n"
-        f"Direction: {predicted_direction} to {actual_direction} "
-            f"({'CORRECT' if direction_correct else 'WRONG'})\n\n"
-        f"<b>10-DAY STATS</b> (n={nw})\n"
-        f"Win: <b>{win_rate:.0%}</b>  Call: {call_rate:.0%}  Put: {put_rate:.0%}  Dir: {regime_acc:.0%}"
+        "<b>NIFTY BACKTEST - " + today_disp + "</b>\n"
+        + ok + " <b>" + label + "</b>" + src_note + "\n\n"
+        + "Regime: <b>" + cr + "</b> " + ri + " to " + str(actual_cr) + " (" + rp_word2 + ")\n"
+        + "OHLC: O:" + str(round(tO)) + " H:" + str(round(tH)) +
+        " L:" + str(round(tL)) + " C:" + str(round(tC)) + "\n\n"
+        + "<b>STRIKES</b>\n"
+        + ci2 + " CALL " + str(cs) + " CE  margin: " + fmti(call_margin) + " pts\n"
+        + pi2 + " PUT  " + str(ps_strike) + " PE  margin: " + fmti(put_margin) + " pts\n"
+        + "Range: actual " + str(round(actual_range)) + " pts vs VIX-implied " +
+        str(round(vix_implied_range)) + " pts (" + str(range_ratio) + "x)\n"
+        + "Direction: " + predicted_direction + " to " + actual_direction + " (" + dc_word2 + ")\n\n"
+        + "<b>10-DAY STATS</b> (n=" + str(nw) + ")\n"
+        + "Win: <b>" + str(round(win_rate*100)) + "%</b>  Call: " +
+        str(round(call_rate*100)) + "%  Put: " + str(round(put_rate*100)) + "%  Dir: " +
+        str(round(regime_acc*100)) + "%"
     )
 
     if params_changed:
-        msg += "\n\n<b>AUTO-HEAL TRIGGERED</b>\n" + "\n".join(f"  {c}" for c in change_notes)
+        msg += "\n\n<b>AUTO-HEAL TRIGGERED</b>\n" + "\n".join("  " + c for c in change_notes)
     else:
-        msg += "\n\nParams stable — no adjustment"
+        msg += "\n\nParams stable - no adjustment"
 
-    msg += f"\n\n<i>GitHub Actions | {today_disp}</i>"
+    msg += "\n\n<i>GitHub Actions | " + today_disp + "</i>"
     tele(msg)
 
-    print(f"Done: {today_str} | {pnl_label} | Call:{cs} {'OK' if call_survived else 'HIT'} | Put:{ps_strike} {'OK' if put_survived else 'HIT'}")
+    ok_c = "OK" if call_survived else "HIT"
+    ok_p = "OK" if put_survived  else "HIT"
+    print("Done: " + today_str + " | " + pnl_label +
+          " | Call:" + str(cs) + " " + ok_c +
+          " | Put:" + str(ps_strike) + " " + ok_p)
     if params_changed:
         print("Auto-heal:", change_notes)
 

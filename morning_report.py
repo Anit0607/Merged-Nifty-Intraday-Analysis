@@ -98,6 +98,20 @@ def main():
         vix = float(yf.Ticker("^INDIAVIX").history(period="5d")["Close"].dropna().iloc[-1])
     except: vix = 19.5
 
+    # Try to get today Nifty opening price (available after 9:15 AM IST)
+    today_open = None
+    try:
+        import pytz as _ptz
+        _intra = yf.Ticker("^NSEI").history(period="1d", interval="1m")[["Open"]].dropna()
+        if len(_intra) > 0:
+            _bar0 = _intra.index[0]
+            if hasattr(_bar0, "tzinfo") and _bar0.tzinfo is not None:
+                _bar0 = _bar0.astimezone(_ptz.timezone("Asia/Calcutta"))
+            if _bar0.date() == today.date():
+                today_open = round(float(_intra["Open"].iloc[0]))
+    except Exception:
+        pass
+
     if   vix < 12: vix_lbl = "Very Low"
     elif vix < 16: vix_lbl = "Normal"
     elif vix < 20: vix_lbl = "Elevated"
@@ -281,6 +295,9 @@ def main():
     msg1 = (
         f"<b>NIFTY PRE-MARKET {today_disp}</b>\n"
         f"Ref Price (Prev Close): <b>{pC:.0f}</b>\n"
+        f"Ref Price (Prev Close): <b>{pC:.0f}</b> | Nifty Open: <b>" +
+        (str(today_open) + " [LIVE]" if today_open else "awaiting 9:15 AM") +
+        "</b>\n"
         f"Regime: <b>{cr}</b> {ri} | Persist: {pers:.0%} | VIX: {vix:.1f} [{vix_lbl}]\n"
         f"Drift: {drift:+.0f} pts/day | Escape prob: {esc:.0%}\n"
         f"Global: S&amp;P {sp:+.1f}% Nsdq {nq:+.1f}% Nikkei {nk:+.1f}% HSI {hs:+.1f}%\n"

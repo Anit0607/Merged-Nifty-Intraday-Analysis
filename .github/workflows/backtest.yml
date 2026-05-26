@@ -1,37 +1,25 @@
-﻿name: Backtest
-
+name: Backtest
 on:
   schedule:
-    # 10:30 UTC = 04:00 PM IST (Mon-Fri)
     - cron: '30 10 * * 1-5'
   workflow_dispatch:
-
 permissions:
   contents: write
-
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 jobs:
   run-backtest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: true
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install yfinance numpy pandas requests pytz
-
-      - name: Run backtest
-        run: python backtest.py
-
+      - uses: actions/setup-python@v4
+        with: {python-version: '3.11'}
+      - run: pip install yfinance numpy pandas requests pytz
+      - run: python backtest.py
       - name: Commit and push results
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"

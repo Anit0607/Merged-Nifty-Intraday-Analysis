@@ -296,7 +296,21 @@ def main():
             writer.writeheader()
         writer.writerow(row)
 
-    # 11. Rolling stats
+    # 11. Rolling stats — with CSV header resilience check
+    # If existing file has wrong column count, reset it (keeps current row)
+    try:
+        with open(RESULTS_FILE, "r", encoding="utf-8") as _f:
+            _first = _f.readline().strip()
+        if len(_first.split(",")) != len(RESULTS_HEADER):
+            print("results.csv header mismatch (" + str(len(_first.split(","))) +
+                  " cols vs " + str(len(RESULTS_HEADER)) + " expected) - resetting")
+            with open(RESULTS_FILE, "w", newline="", encoding="utf-8") as _f:
+                _w = csv.DictWriter(_f, fieldnames=RESULTS_HEADER)
+                _w.writeheader()
+                _w.writerow(row)
+    except Exception as _e:
+        print("CSV check error: " + str(_e))
+
     results_df = pd.read_csv(RESULTS_FILE)
     n          = len(results_df)
     window     = results_df.tail(10)

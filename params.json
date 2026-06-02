@@ -10,7 +10,7 @@
   "call_buffer_pts": 15,
   "notes": "v2: added vix_range_mult, consecutive_losses, emergency_widen for auto-healing",
   "put_survival_rate_10d": null,
-  "consecutive_losses": 2,
+  "consecutive_losses": 0,
   "intraday_weight": 0.4,
   "strangle_win_rate_10d": null,
   "put_buffer_pts": 50,

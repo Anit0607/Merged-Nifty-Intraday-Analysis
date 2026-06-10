@@ -7,13 +7,13 @@
   "call_otm_multiplier": 1.12,
   "version": 2,
   "put_otm_multiplier": 1.18,
-  "call_buffer_pts": 140,
-  "notes": "call_buffer 115->140 (call 0%<70%) | put_buffer 150->175 (put 0%<70%) | markov_weight 0.4->0.35 (direction 0%<45%, trust intraday more) | vix_range_mult 1.5->1.4 (actual only 0.65x VIX-implied, tighten)",
+  "call_buffer_pts": 165,
+  "notes": "call_buffer 140->165 (call 0%<70%) | put_buffer 175->200 (put 0%<70%)",
   "put_survival_rate_10d": 0.0,
   "consecutive_losses": 0,
   "intraday_weight": 0.65,
   "strangle_win_rate_10d": 0.0,
-  "put_buffer_pts": 175,
+  "put_buffer_pts": 200,
   "markov_weight": 0.35,
-  "last_updated": "2026-06-09"
+  "last_updated": "2026-06-10"
 }

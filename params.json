@@ -7,13 +7,13 @@
   "call_otm_multiplier": 1.12,
   "version": 2,
   "put_otm_multiplier": 1.18,
-  "call_buffer_pts": 165,
-  "notes": "call_buffer 140->165 (call 0%<70%) | put_buffer 175->200 (put 0%<70%)",
+  "call_buffer_pts": 190,
+  "notes": "call_buffer 165->190 (call 0%<70%)",
   "put_survival_rate_10d": 0.0,
   "consecutive_losses": 0,
   "intraday_weight": 0.65,
   "strangle_win_rate_10d": 0.0,
   "put_buffer_pts": 200,
   "markov_weight": 0.35,
-  "last_updated": "2026-06-10"
+  "last_updated": "2026-06-11"
 }

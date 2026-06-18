@@ -2,18 +2,18 @@
   "call_survival_rate_10d": 0.0,
   "vix_assumed": 19.5,
   "emergency_widen": false,
-  "vix_range_mult": 1.2,
+  "vix_range_mult": 1.1,
   "regime_accuracy_10d": 0.0,
   "call_otm_multiplier": 1.12,
   "version": 2,
   "put_otm_multiplier": 1.18,
   "call_buffer_pts": 200,
-  "notes": "vix_range_mult 1.3->1.2 (actual only 0.62x VIX-implied, tighten)",
+  "notes": "vix_range_mult 1.2->1.1 (actual only 0.63x VIX-implied, tighten)",
   "put_survival_rate_10d": 0.0,
   "consecutive_losses": 0,
   "intraday_weight": 0.65,
   "strangle_win_rate_10d": 0.0,
   "put_buffer_pts": 200,
   "markov_weight": 0.35,
-  "last_updated": "2026-06-17"
+  "last_updated": "2026-06-18"
 }

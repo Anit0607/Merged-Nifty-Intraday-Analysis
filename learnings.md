@@ -1,4 +1,17 @@
 
+## 2026-07-15 | Sideways -> Sideways | PROFIT [session_state]
+| Metric | Value |
+|--------|-------|
+| OHLC | O:24086 H:24220 L:24011 C:24078 |
+| Gap | -0.49% (strong_below_cpr) |
+| CPR | 24145 - 24184 (W=40 pts) |
+| Call 24600 CE | SAFE (+380 pts) |
+| Put 23750 PE | SAFE (+261 pts) |
+| Range | actual 210 vs VIX-implied 210 pts (1.001x) |
+| Direction | Sideways -> Sideways (CORRECT) |
+| Regime | Sideways -> Sideways (PERSISTED) |
+| 10d Win Rate | 0% (Call: 0% | Put: 0%) |
+
 ## 2026-07-14 | Sideways -> Sideways | PROFIT [session_state]
 | Metric | Value |
 |--------|-------|

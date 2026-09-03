@@ -1,4 +1,17 @@
 
+## 2026-09-03 | Bear -> Bear | PROFIT [session_state]
+| Metric | Value |
+|--------|-------|
+| OHLC | O:23998 H:24025 L:23873 C:23873 |
+| Gap | +0.39% (above_cpr) |
+| CPR | 23923 - 23959 (W=36 pts) |
+| Call 24200 CE | SAFE (+175 pts) |
+| Put 23550 PE | SAFE (+323 pts) |
+| Range | actual 152 vs VIX-implied 174 pts (0.871x) |
+| Direction | Down -> Down (CORRECT) |
+| Regime | Bear -> Bear (PERSISTED) |
+| 10d Win Rate | 0% (Call: 0% | Put: 0%) |
+
 ## 2026-09-02 | Bear -> Bear | PROFIT [session_state]
 | Metric | Value |
 |--------|-------|

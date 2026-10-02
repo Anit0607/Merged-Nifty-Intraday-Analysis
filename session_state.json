@@ -1,6 +1,6 @@
 {
-  "date": "01 Oct 2026",
-  "date_iso": "2026-10-01",
+  "date": "02 Oct 2026",
+  "date_iso": "2026-10-02",
   "prev_high": 22610.599609375,
   "prev_low": 22217.30078125,
   "prev_close": 22421.94921875,
@@ -17,11 +17,11 @@
   "regime": "Bear",
   "persistence": 0.861,
   "escape": 0.139,
-  "prob_up": 8,
-  "prob_side": 62,
-  "prob_down": 30,
-  "vix": 14.454999923706055,
+  "prob_up": 0,
+  "prob_side": 67,
+  "prob_down": 33,
+  "vix": 14.460000038146973,
   "exp_high": 22626,
   "exp_low": 22218,
-  "conf_overall": 48
+  "conf_overall": 51
 }

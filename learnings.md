@@ -1,4 +1,17 @@
 
+## 2026-11-04 | Bull -> Bull | PROFIT [session_state]
+| Metric | Value |
+|--------|-------|
+| OHLC | O:23742 H:23961 L:23696 C:23961 |
+| Gap | -0.91% (strong_below_cpr) |
+| CPR | 23828 - 23916 (W=88 pts) |
+| Call 24400 CE | SAFE (+439 pts) |
+| Put 23400 PE | SAFE (+296 pts) |
+| Range | actual 264 vs VIX-implied 356 pts (0.743x) |
+| Direction | Up -> Up (CORRECT) |
+| Regime | Bull -> Bull (PERSISTED) |
+| 10d Win Rate | 0% (Call: 0% | Put: 0%) |
+
 ## 2026-11-03 | Bull -> Bull | PROFIT [session_state]
 | Metric | Value |
 |--------|-------|

@@ -1,6 +1,6 @@
 {
-  "date": "09 Nov 2026",
-  "date_iso": "2026-11-09",
+  "date": "10 Nov 2026",
+  "date_iso": "2026-11-10",
   "prev_high": 25084.05078125,
   "prev_low": 24838.75,
   "prev_close": 25044.650390625,
@@ -17,11 +17,11 @@
   "regime": "Bull",
   "persistence": 0.8823,
   "escape": 0.1177,
-  "prob_up": 39,
-  "prob_side": 61,
+  "prob_up": 50,
+  "prob_side": 50,
   "prob_down": 0,
   "vix": 17.420000076293945,
   "exp_high": 25457,
   "exp_low": 24632,
-  "conf_overall": 51
+  "conf_overall": 53
 }
